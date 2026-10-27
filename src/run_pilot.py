@@ -5,6 +5,8 @@ Stops before freeze by design: it never runs the main experiment (H2).
 import argparse
 import os
 
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")  # needed for deterministic cuBLAS
+
 from . import config, stages
 from .model import load
 
@@ -17,6 +19,9 @@ def main():
     ap.add_argument("--batch", type=int, default=config.BATCH_SIZE)
     a = ap.parse_args()
     config.BATCH_SIZE = a.batch
+    import torch
+    torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.backends.cudnn.benchmark = False
     token = os.environ.get("HF_TOKEN") or None
     stages.log(f"loading {a.model}")
     w = load(a.model, token=token)

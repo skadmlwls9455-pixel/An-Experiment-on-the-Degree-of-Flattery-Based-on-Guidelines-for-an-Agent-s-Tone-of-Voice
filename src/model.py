@@ -18,6 +18,10 @@ def load(model_id, dtype=None, token=None):
     from transformers import AutoTokenizer
     dtype = dtype or pick_dtype()
     tok = AutoTokenizer.from_pretrained(model_id, token=token)
+    if not getattr(tok, "chat_template", None):
+        # multimodal checkpoints sometimes keep the template on the processor only
+        from transformers import AutoProcessor
+        tok.chat_template = AutoProcessor.from_pretrained(model_id, token=token).chat_template
     tok.padding_side = "left"
     if tok.pad_token is None:
         tok.pad_token = tok.eos_token
@@ -74,8 +78,10 @@ class Wrapped:
 
     # ---------- hooks ----------
     @contextlib.contextmanager
-    def steer(self, vectors):
-        """vectors: {layer: tensor[d_model]} already scaled (dose * median * unit)."""
+    def steer(self, vectors, last_only=False):
+        """vectors: {layer: tensor[d_model]} already scaled (dose * median * unit).
+        Adds at every position of the layer output; last_only=True adds at the
+        final position of each forward call only (diagnostic)."""
         handles = []
         try:
             for layer, v in (vectors or {}).items():
@@ -83,7 +89,12 @@ class Wrapped:
 
                 def hook(mod, inp, out, v=v):
                     h = _hidden(out)
-                    return _replace(out, h + v.to(device=h.device, dtype=h.dtype))
+                    add = v.to(device=h.device, dtype=h.dtype)
+                    if last_only:
+                        h = h.clone()
+                        h[:, -1] = h[:, -1] + add
+                        return _replace(out, h)
+                    return _replace(out, h + add)
                 handles.append(self.layers[layer].register_forward_hook(hook))
             yield
         finally:
@@ -151,10 +162,28 @@ class Wrapped:
                 finished=finished, new_tokens=len(body)))
         return res
 
+    def layer_scalar(self, layer):
+        b = getattr(self.layers[layer], "layer_scalar", None)
+        return 1.0 if b is None else float(b.detach().float().reshape(-1)[0])
+
+    def propagated(self, v, from_layer, to_layer):
+        """The injected vector as it reaches to_layer's output through the residual
+        stream. Gemma 4 multiplies the whole residual by layer_scalar at the end of
+        every layer, so the added vector is rescaled by each later layer."""
+        k = 1.0
+        for j in range(from_layer + 1, to_layer + 1):
+            k *= self.layer_scalar(j)
+        return torch.as_tensor(v, dtype=torch.float32) * k
+
+    def kv_shared_from(self):
+        cfg = getattr(self.model.config, "text_config", self.model.config)
+        n = getattr(cfg, "num_kv_shared_layers", 0) or 0
+        return cfg.num_hidden_layers - n if n else None
+
     @torch.no_grad()
-    def last_logits(self, texts, vectors=None):
+    def last_logits(self, texts, vectors=None, last_only=False):
         input_ids, mask, _ = self._batch(texts)
-        with self.steer(vectors):
+        with self.steer(vectors, last_only):
             out = self.model(input_ids=input_ids, attention_mask=mask)
         return out.logits[:, -1, :].float().cpu()
 

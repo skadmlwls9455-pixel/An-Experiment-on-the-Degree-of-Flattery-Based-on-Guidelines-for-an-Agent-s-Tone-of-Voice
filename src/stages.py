@@ -131,10 +131,16 @@ def s0_sanity(c):
     ids = template.encode(w.tok, text)
     zero = {config.MAIN_LAYER: torch.zeros(w.d_model)}
     base = w.last_logits([text])
+    again = w.last_logits([text])
     with_zero = w.last_logits([text], zero)
     rnd = {config.MAIN_LAYER: scaled(random_direction(w.d_model, 1), 0.5, 50.0)}
     pushed = w.last_logits([text], rnd)
+    pushed_last_only = w.last_logits([text], rnd, last_only=True)
+    from .readouts import induced_change
+    ic = induced_change(w, [text], config.MAIN_LAYER, rnd[config.MAIN_LAYER],
+                        (config.MAIN_LAYER,) + config.READOUT_LAYERS)
     gen = w.generate([text], 64)[0]
+    gen_again = w.generate([text], 64)[0]
     forced = template.render(w.tok, msgs, prefill="최종 답:")
     try:
         letter_ids = w.letter_ids(forced)
@@ -150,18 +156,34 @@ def s0_sanity(c):
         layers_module=w.layers_name, n_layers=w.n_layers, d_model=w.d_model,
         template_sha256=template.template_fingerprint(w.tok),
         rendered_example=text, token_ids_head=ids[:24], token_ids_tail=ids[-12:],
+        repeat_max_abs_diff=float((base - again).abs().max()),
         zero_push_max_abs_diff=float((base - with_zero).abs().max()),
         random_push_max_abs_diff=float((base - pushed).abs().max()),
+        # If L15+ reuse earlier layers' K/V, an L27 injection cannot reach other
+        # positions: all-position and last-position-only injection then give the
+        # same final logits, and turn-1 positions cannot affect turn-2 generation.
+        all_vs_last_only_max_abs_diff=float((pushed - pushed_last_only).abs().max()),
+        kv_shared_from_layer=w.kv_shared_from(),
+        layer_scalars={l: w.layer_scalar(l) for l in range(w.n_layers)},
+        induced_change_norm={l: v["norm"][0] for l, v in ic.items()},
         example_generation=gen,
+        generation_repeat_identical=gen["text"] == gen_again["text"],
         thought_marker_in_raw=any(s in gen["raw"] for s in ("thought", "<|channel", "<|think")),
         letter_single_token=letter_ok, letter_ids=letter_ids,
     )
     write_json(d / "sanity.json", info)
     log("S0", json.dumps({k: info[k] for k in ("n_layers", "d_model", "dtype", "zero_push_max_abs_diff",
-                                               "random_push_max_abs_diff", "thought_marker_in_raw",
+                                               "random_push_max_abs_diff", "all_vs_last_only_max_abs_diff",
+                                               "kv_shared_from_layer", "thought_marker_in_raw",
                                                "letter_single_token")}))
-    if info["zero_push_max_abs_diff"] != 0.0:
-        raise RuntimeError("zero injection changed logits; hook is not a no-op")
+    if info["induced_change_norm"][config.MAIN_LAYER] > 1e-3 * max(1.0, float(torch.linalg.vector_norm(rnd[config.MAIN_LAYER]))):
+        raise RuntimeError("M3 subtraction is wrong: induced change at the injection layer is not zero")
+    # Kernels can be slightly non-deterministic, so compare against the repeat noise floor.
+    tol = max(4 * info["repeat_max_abs_diff"], 1e-3 * float(base.abs().max()))
+    info["zero_push_tolerance"] = tol
+    write_json(d / "sanity.json", info)
+    if info["zero_push_max_abs_diff"] > tol:
+        raise RuntimeError("zero injection changed logits beyond the repeat noise; hook is not a no-op")
     if not letter_ok:
         raise RuntimeError("answer letters are not single tokens; fix the forced readout first")
     return info

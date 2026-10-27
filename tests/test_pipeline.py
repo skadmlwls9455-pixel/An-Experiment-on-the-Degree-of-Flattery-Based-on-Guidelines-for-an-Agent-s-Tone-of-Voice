@@ -38,7 +38,7 @@ def toy_tokenizer():
     special = ["<pad>", "<bos>", "<eos>", "<unk>", "<|turn>", "<turn|>"]
     vocab = {t: i for i, t in enumerate(special + [" A", " B", " C", " D"] + chars)}
     tk = Tokenizer(models.WordLevel(vocab=vocab, unk_token="<unk>"))
-    tk.pre_tokenizer = pre_tokenizers.Split(Regex(r"(?s) [A-D]|."), behavior="isolated")
+    tk.pre_tokenizer = pre_tokenizers.Split(Regex(r" [A-D]|[\s\S]"), behavior="isolated")
     tok = PreTrainedTokenizerFast(tokenizer_object=tk, bos_token="<bos>", eos_token="<eos>",
                                   unk_token="<unk>", pad_token="<pad>",
                                   additional_special_tokens=["<|turn>", "<turn|>"])
@@ -56,7 +56,7 @@ def tiny_gemma4(vocab_size):
     return m
 
 
-TINY_CFG = dict(num_hidden_layers=35, hidden_size=64, intermediate_size=128, num_attention_heads=2,
+TINY_CFG = dict(num_hidden_layers=35, num_kv_shared_layers=20, hidden_size=64, intermediate_size=128, num_attention_heads=2,
                 num_key_value_heads=1, head_dim=32)
 
 
@@ -102,6 +102,28 @@ def test_mechanics():
     # residual spans
     r = w.residuals([text, other], [27], [(3, 10), (3, 12)])
     assert r[27][0].shape == (2, w.d_model)
+    # KV sharing from L15: an L27 injection cannot reach other positions
+    assert w.kv_shared_from() == 15
+    big = {27: 5 * v}
+    assert torch.allclose(w.last_logits([text], big), w.last_logits([text], big, last_only=True), atol=1e-5)
+    # ...but an injection before the sharing point does reach them
+    early = {10: 5 * v}
+    assert not torch.allclose(w.last_logits([text], early), w.last_logits([text], early, last_only=True), atol=1e-4)
+    # M3: with non-unit layer scalars the carried injection must be rescaled
+    from src.readouts import induced_change
+    for j, layer in enumerate(w.layers):
+        layer.layer_scalar.fill_(0.9 + 0.01 * j)
+    ic = induced_change(w, [text], 27, v, [27, 28, 34])
+    assert ic[27]["norm"][0] < 1e-4
+    assert abs(w.layer_scalar(28) - 1.18) < 1e-6
+    assert torch.allclose(w.propagated(v, 27, 29), v * 1.18 * 1.19)
+    # zeroing everything after L27 except the scalar: induced change must vanish
+    with torch.no_grad():
+        for layer in list(w.layers)[28:30]:
+            for p in layer.parameters():
+                p.zero_()
+    ic = induced_change(w, [text], 27, v, [28, 29])
+    assert ic[28]["norm"][0] < 1e-4 and ic[29]["norm"][0] < 1e-4, ic
     print("mechanics ok")
 
 
