@@ -220,6 +220,62 @@ def test_stages_end_to_end():
         shutil.rmtree(tmp)
 
 
+
+
+def test_main_end_to_end():
+    """Pilot -> RULE.md -> freeze -> main H2 run with 3 random directions -> analysis.
+    Also checks that a changed input makes the freeze check refuse."""
+    from src import e2_main, freeze
+    saved = dict(N_PILOT=config.N_PILOT, N_DIRVAL=config.N_DIRVAL, CALIB=config.CALIB_KMMLU_ITEMS,
+                 K=config.PILOT_RANDOM_K, B=config.BOOTSTRAP, ROOT=freeze.ROOT)
+    config.N_PILOT, config.N_DIRVAL, config.CALIB_KMMLU_ITEMS = 40, 8, 6
+    config.PILOT_RANDOM_K, config.BOOTSTRAP = 2, 200
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        w = scripted_wrapped()
+        items = fake_items(400)
+        pilot = tmp / "pilot"
+        stages.run_all(stages.Ctx(w, pilot, items=items))
+        d_star = json.loads((pilot / "s5_calibrate" / "summary.json").read_text())["d_star"]
+        root = tmp / "repo"
+        shutil.copytree(ROOT / "src", root / "src")
+        shutil.copy(ROOT / "SPEC.md", root / "SPEC.md")
+        params = dict(d_star=d_star, n_valid=30, random_k=3, dtype="torch.float32")
+        (root / "RULE.md").write_text("# RULE\n```json\n" + json.dumps(params) + "\n```\n")
+        freeze.ROOT = root
+        freeze.write(pilot)
+        assert freeze.check(pilot) == params
+        main = tmp / "main"
+        m = e2_main.Main(stages.Ctx(w, main, items=items), pilot, params)
+        ok = m.turn1()
+        assert len(ok) == 30
+        for name in ["none", "hasipsio", "rand0", "rand1", "rand2"]:
+            for cond in e2_main.CONDS:
+                m.cell(ok, name, cond)
+        m.readouts(ok)
+        r = e2_main.analyse(m, ok, 3)
+        assert r["n_complete"] > 0 and r["classification"], r
+        assert len(r["random_did"]) == 3
+        assert (main / "audit_sample.jsonl").exists()
+        sample = stages.read_jsonl(main / "audit_sample.jsonl")
+        assert all("steer" not in s and "cond" not in s for s in sample)
+        print("main:", r["classification"], r["did"], r["gates"])
+        # tamper with a frozen input: check must refuse
+        (root / "SPEC.md").write_text((root / "SPEC.md").read_text() + "\nchanged\n")
+        try:
+            freeze.check(pilot)
+            raise AssertionError("freeze check accepted a changed file")
+        except RuntimeError:
+            pass
+        print("main ok")
+    finally:
+        config.N_PILOT, config.N_DIRVAL, config.CALIB_KMMLU_ITEMS = saved["N_PILOT"], saved["N_DIRVAL"], saved["CALIB"]
+        config.PILOT_RANDOM_K, config.BOOTSTRAP = saved["K"], saved["B"]
+        freeze.ROOT = saved["ROOT"]
+        shutil.rmtree(tmp)
+
+
 if __name__ == "__main__":
     test_mechanics()
     test_stages_end_to_end()
+    test_main_end_to_end()

@@ -50,6 +50,10 @@ def run_generation(w, jobs, path, max_new_tokens, vectors=None, batch=config.BAT
     """jobs: list of dict(key, text, **meta). Appends results to path, skips done keys.
     blind=True drops the letter and masks option letters before writing."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():  # drop a line cut short by a crash before appending
+        raw = path.read_text()
+        if raw and not raw.endswith("\n"):
+            path.write_text(raw[:raw.rfind("\n") + 1])
     done = {r["key"] for r in read_jsonl(path)}
     todo = [j for j in jobs if j["key"] not in done]
     todo.sort(key=lambda j: len(j["text"]))
@@ -279,12 +283,12 @@ def s2_directions(c):
     # portability: IT direction vs public base-model vector
     base = unit(np.load(config.THIRD / "vectors" / "hasipsio.dir.L27.npy"))
     it = c.direction("hasipsio")
-    summary["portability_cos_it_vs_base_L27"] = float(it @ base)
+    summary["portability_cos_it_vs_base_L27"] = float(it @ base) if base.shape == it.shape else None
     summary["cos_hasipsio_polite_L27"] = float(it @ vp)
     summary["stable"] = summary["hasipsio"]["L27"]["cos_build_val"] > 0.5
     write_json(d / "directions.json", summary)
     log("S2 hasipsio L27 cos(build,val) =", round(summary["hasipsio"]["L27"]["cos_build_val"], 3),
-        "| portability", round(summary["portability_cos_it_vs_base_L27"], 3))
+        "| portability", summary["portability_cos_it_vs_base_L27"])
     if not summary["stable"]:
         log("S2 STOP: hasipsio direction unstable (cos <= 0.5); H2 is stopped per SPEC §6.5")
     return summary
