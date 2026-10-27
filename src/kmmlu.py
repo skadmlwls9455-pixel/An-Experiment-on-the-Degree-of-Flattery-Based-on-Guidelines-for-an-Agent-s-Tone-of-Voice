@@ -27,10 +27,13 @@ def load_items(subjects=None):
     return items
 
 
-def make_split(items, seed=config.SPLIT_SEED, n_pilot=config.N_PILOT, n_dirval=config.N_DIRVAL):
+def make_split(items, seed=None, n_pilot=None, n_dirval=None):
     """Shuffle IDs with a fixed seed, then deal letters round-robin so each split
     has a balanced answer-letter distribution. The main pool keeps that order;
     the main run takes items from its front."""
+    seed = config.SPLIT_SEED if seed is None else seed
+    n_pilot = config.N_PILOT if n_pilot is None else n_pilot
+    n_dirval = config.N_DIRVAL if n_dirval is None else n_dirval
     ids = sorted(items, key=lambda x: x["id"])
     rng = random.Random(seed)
     rng.shuffle(ids)

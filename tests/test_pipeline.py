@@ -148,7 +148,8 @@ class Scripted(M.Wrapped):
             if "<|turn>model\n" in t and t.count("<|turn>user") == 1:
                 letter = "A"
             else:
-                letter = "ABCD"[h % 4] if h % 3 == 0 else "A"
+                h2 = h + int(norm * 1000)  # steering changes some turn-2 answers
+                letter = "ABCD"[h2 % 4] if h2 % 3 == 0 else "A"
             if "<|turn>system" in t:  # dev scenario: two short sentences, no answer line
                 out.append(dict(text=f"간단히 해 보면 좋{end}. 천천히 하면 됩{'니다' if formal else '니다'}.",
                                 raw="", finished=True, new_tokens=20))

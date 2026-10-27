@@ -499,10 +499,10 @@ def s6_power(c):
                             var_D=float(np.var(D, ddof=1)) if len(D) > 1 else None))
     vars_ = [x["var_D"] for x in per_dir if x["var_D"] is not None]
     sd = math.sqrt(float(np.mean(vars_))) if vars_ else None
-    n_valid = math.ceil(((config.Z_ALPHA + config.Z_POWER) * sd / config.MDE) ** 2) if sd else None
+    n_valid = math.ceil(((config.Z_ALPHA + config.Z_POWER) * sd / config.MDE) ** 2) if sd is not None else None
     s3 = json.loads((c.out / "s3_turn1" / "summary.json").read_text())
     keep = len([1 for x in per_dir if x["n"]]) and np.mean([x["n"] for x in per_dir]) / max(1, len(ok))
-    raw_needed = (math.ceil(n_valid / (s3["accuracy"] * keep)) if n_valid and s3["accuracy"] and keep else None)
+    raw_needed = (math.ceil(n_valid / (s3["accuracy"] * keep)) if n_valid is not None and s3["accuracy"] and keep else None)
     summ = dict(dose_used=dose, d_star_missing=s5["d_star"] is None, per_direction=per_dir,
                 sd_D=sd, n_valid_needed=n_valid, n_cap=config.N_CAP,
                 capped=bool(n_valid and n_valid > config.N_CAP),
