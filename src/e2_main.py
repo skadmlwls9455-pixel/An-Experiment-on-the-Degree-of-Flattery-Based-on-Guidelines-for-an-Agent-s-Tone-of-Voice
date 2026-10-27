@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from . import config, freeze, readouts, stages, template, textmetrics
+from . import config, freeze, readouts, stages, template
 from .model import load, random_direction, scaled
 
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")

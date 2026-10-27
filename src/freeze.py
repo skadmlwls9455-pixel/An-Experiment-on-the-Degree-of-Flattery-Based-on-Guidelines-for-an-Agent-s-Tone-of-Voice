@@ -30,7 +30,7 @@ def tracked(pilot):
         files[f"src/{p.name}"] = p
     for p in sorted(config.THIRD.rglob("*")):
         if p.is_file():
-            files[str(p.relative_to(ROOT))] = p
+            files["third_party/neuron-map/" + p.relative_to(config.THIRD).as_posix()] = p
     for f in PILOT_FILES:
         files[f"pilot/{f}"] = Path(pilot) / f
     return files
